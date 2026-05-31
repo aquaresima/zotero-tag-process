@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Review — Tag Generation{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-4">Review &amp; Approve</h1>
+
+<div class="bg-white rounded-lg shadow p-4 mb-5 sticky top-0 z-10 flex flex-wrap items-center gap-4">
+  <div class="flex items-center gap-2">
+    <label class="text-sm font-medium">Confidence ≥</label>
+    <input id="threshold" type="range" min="0" max="1" step="0.05" value="0.7" class="w-40">
+    <span id="threshold-val" class="text-sm font-mono w-10">0.70</span>
+  </div>
+  <button id="btn-bulk"
+          class="bg-emerald-600 text-white px-3 py-1.5 rounded text-sm hover:bg-emerald-700">
+    Approve all papers above threshold
+  </button>
+  <div class="ml-auto text-sm text-slate-600">
+    <span class="mr-3">pending: <b id="c-pending">0</b></span>
+    <span class="mr-3 text-emerald-700">approved: <b id="c-approved">0</b></span>
+    <span class="text-rose-700">rejected: <b id="c-rejected">0</b></span>
+  </div>
+</div>
+
+<div id="papers" class="space-y-4"></div>
+
+<div class="flex items-center justify-center gap-3 mt-6">
+  <button data-page="first" class="pg px-3 py-1 border rounded">⟪</button>
+  <button data-page="prev"  class="pg px-3 py-1 border rounded">‹</button>
+  <span class="text-sm">page <b id="pg-cur">1</b> / <b id="pg-total">1</b></span>
+  <button data-page="next"  class="pg px-3 py-1 border rounded">›</button>
+  <button data-page="last"  class="pg px-3 py-1 border rounded">⟫</button>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+const $ = s => document.querySelector(s);
+let page = 1, totalPages = 1;
+const esc = s => (s || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function threshold() { return parseFloat($('#threshold').value); }
+
+$('#threshold').addEventListener('input', () => {
+  $('#threshold-val').textContent = threshold().toFixed(2);
+});
+
+async function load() {
+  const data = await (await fetch(`/api/proposals?page=${page}`)).json();
+  page = data.page; totalPages = data.total_pages;
+  $('#pg-cur').textContent = page;
+  $('#pg-total').textContent = totalPages;
+  $('#c-pending').textContent = data.counts.pending;
+  $('#c-approved').textContent = data.counts.approved;
+  $('#c-rejected').textContent = data.counts.rejected;
+  render(data.items);
+}
+
+function chip(p) {
+  const catColor = {general:'bg-slate-100', method:'bg-amber-100', field:'bg-sky-100'}[p.category] || 'bg-slate-100';
+  if (p.status === 'approved' || p.status === 'edited') {
+    return `<span class="inline-flex items-center gap-1 ${catColor} border border-emerald-400 rounded px-2 py-0.5 text-sm">
+      <span class="text-emerald-700">${esc(p.tag_name)}</span>
+      <span class="text-xs text-slate-400">${p.confidence}</span>
+      <button class="undo text-slate-500 hover:text-slate-800" data-id="${p.id}" title="undo">↩</button></span>`;
+  }
+  if (p.status === 'rejected') {
+    return `<span class="inline-flex items-center gap-1 bg-rose-50 border border-rose-300 rounded px-2 py-0.5 text-sm line-through text-rose-400">
+      ${esc(p.tag_name)}
+      <button class="undo text-slate-500 hover:text-slate-800 no-underline" data-id="${p.id}" title="undo">↩</button></span>`;
+  }
+  return `<span class="inline-flex items-center gap-1 ${catColor} border rounded px-2 py-0.5 text-sm">
+    ${esc(p.tag_name)}
+    <span class="text-xs text-slate-400">${p.confidence}</span>
+    <button class="approve text-emerald-600 hover:text-emerald-800" data-id="${p.id}">✓</button>
+    <button class="reject text-rose-500 hover:text-rose-700" data-id="${p.id}">✗</button></span>`;
+}
+
+function render(items) {
+  if (!items.length) {
+    $('#papers').innerHTML = '<p class="text-slate-500 text-center py-8">No pending papers on this page.</p>';
+    return;
+  }
+  $('#papers').innerHTML = items.map(it => `
+    <div class="bg-white rounded-lg shadow p-4" data-item="${it.item_id}">
+      <div class="flex justify-between items-start gap-3">
+        <div>
+          <h3 class="font-semibold">${esc(it.title)}</h3>
+          <p class="text-xs text-slate-500">${esc((it.authors||[]).slice(0,4).join(', '))}${it.year ? ' · '+it.year : ''}
+            · avg conf ${it.avg_confidence}</p>
+        </div>
+        <div class="flex gap-2 shrink-0">
+          <button class="approve-all bg-emerald-600 text-white px-2 py-1 rounded text-xs">Approve all</button>
+          <button class="unapprove-all bg-slate-200 px-2 py-1 rounded text-xs">Unapprove all</button>
+        </div>
+      </div>
+      ${it.current_tags.length ? `<div class="mt-2 flex flex-wrap gap-1">
+        ${it.current_tags.map(t => `<span class="bg-slate-200 text-slate-600 rounded px-2 py-0.5 text-xs">${esc(t)}</span>`).join('')}
+      </div>` : ''}
+      <details class="mt-2 text-sm text-slate-600"><summary class="cursor-pointer">Abstract</summary>
+        <p class="mt-1">${esc(it.abstract) || '(none)'}</p></details>
+      <div class="mt-3 flex flex-wrap gap-1.5">
+        ${it.proposals.map(chip).join('')}
+      </div>
+    </div>`).join('');
+}
+
+async function post(url) { await fetch(url, {method: 'POST'}); }
+
+document.addEventListener('click', async e => {
+  const id = e.target.dataset.id;
+  const card = e.target.closest('[data-item]');
+  const iid = card && card.dataset.item;
+  if (e.target.classList.contains('approve')) { await post(`/api/proposal/${id}/approve`); load(); }
+  else if (e.target.classList.contains('reject')) { await post(`/api/proposal/${id}/reject`); load(); }
+  else if (e.target.classList.contains('undo')) { await post(`/api/proposal/${id}/unapprove`); load(); }
+  else if (e.target.classList.contains('approve-all')) { await post(`/api/item/${iid}/approve-all?threshold=${threshold()}`); load(); }
+  else if (e.target.classList.contains('unapprove-all')) { await post(`/api/item/${iid}/unapprove-all`); load(); }
+});
+
+$('#btn-bulk').addEventListener('click', async () => {
+  await post(`/api/proposals/bulk-approve?threshold=${threshold()}`); page = 1; load();
+});
+
+document.querySelectorAll('.pg').forEach(b => b.addEventListener('click', () => {
+  const a = b.dataset.page;
+  if (a === 'first') page = 1;
+  else if (a === 'prev') page = Math.max(1, page - 1);
+  else if (a === 'next') page = Math.min(totalPages, page + 1);
+  else if (a === 'last') page = totalPages;
+  load();
+}));
+
+load();
+// Real-time refresh while generation streams in new proposals.
+setInterval(async () => {
+  const s = await (await fetch('/api/status')).json();
+  if (s.worker_running) load();
+}, 4000);
+</script>
+{% endblock %}

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Setup & Generate — Tag Generation{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-4">Setup &amp; Generate</h1>
+
+<section class="bg-white rounded-lg shadow p-5 mb-6">
+  <h2 class="font-semibold mb-3">Paths</h2>
+  <label class="block text-sm font-medium mb-1">Path to zotero.sqlite</label>
+  <input id="zotero_path" type="text"
+         class="w-full border rounded px-3 py-2 mb-3 font-mono text-sm" />
+  <label class="block text-sm font-medium mb-1">Output generatedtags DB</label>
+  <input id="output_path" type="text"
+         class="w-full border rounded px-3 py-2 font-mono text-sm" />
+</section>
+
+<section class="bg-white rounded-lg shadow p-5 mb-6">
+  <h2 class="font-semibold mb-3">Worker settings</h2>
+  <div class="grid grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm font-medium mb-1">Ollama model</label>
+      <input id="ollama_model" type="text" class="w-full border rounded px-3 py-2 text-sm" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">Ollama base URL</label>
+      <input id="ollama_base_url" type="text" class="w-full border rounded px-3 py-2 text-sm" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">Batch size</label>
+      <input id="batch_size" type="number" class="w-full border rounded px-3 py-2 text-sm" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">Vocab size</label>
+      <input id="vocab_size" type="number" class="w-full border rounded px-3 py-2 text-sm" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">Min tags / paper</label>
+      <input id="min_tags" type="number" class="w-full border rounded px-3 py-2 text-sm" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium mb-1">Confidence threshold</label>
+      <input id="confidence_threshold" type="number" step="0.05"
+             class="w-full border rounded px-3 py-2 text-sm" />
+    </div>
+  </div>
+</section>
+
+<section class="bg-white rounded-lg shadow p-5 mb-6">
+  <div class="flex gap-3 items-center">
+    <button id="btn-import"
+            class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">
+      Import &amp; Clean
+    </button>
+    <button id="btn-generate"
+            class="bg-emerald-600 text-white px-4 py-2 rounded hover:bg-emerald-700 disabled:opacity-40"
+            disabled>
+      Generate Tags
+    </button>
+    <span id="state-label" class="text-sm text-slate-500"></span>
+  </div>
+
+  <div class="mt-4">
+    <div class="w-full bg-slate-200 rounded h-4 overflow-hidden">
+      <div id="bar" class="bg-emerald-500 h-4 transition-all" style="width:0%"></div>
+    </div>
+    <p id="progress-text" class="text-sm text-slate-600 mt-2"></p>
+  </div>
+</section>
+
+{% endblock %}
+{% block scripts %}
+<script>
+const $ = s => document.querySelector(s);
+
+async function loadStatus() {
+  const s = await (await fetch('/api/status')).json();
+  if (!$('#zotero_path').value) $('#zotero_path').value = s.default_zotero_path || '';
+  if (!$('#output_path').value) $('#output_path').value = s.db_path || s.default_output_path || '';
+  const st = s.settings || {};
+  if (!$('#ollama_model').value) $('#ollama_model').value = st.ollama_model || '';
+  if (!$('#ollama_base_url').value) $('#ollama_base_url').value = st.ollama_base_url || '';
+  if (!$('#batch_size').value) $('#batch_size').value = st.batch_size ?? '';
+  if (!$('#vocab_size').value) $('#vocab_size').value = st.vocab_size ?? '';
+  if (!$('#min_tags').value) $('#min_tags').value = st.min_tags ?? '';
+  if (!$('#confidence_threshold').value) $('#confidence_threshold').value = st.confidence_threshold ?? '';
+
+  $('#btn-generate').disabled = !s.imported || s.import_running;
+  let label = '';
+  if (s.import_running) label = 'Importing…';
+  else if (s.imported) label = `Imported: ${s.item_count} items, ${s.tag_count} tags`;
+  if (s.import_error) label = 'Import error: ' + s.import_error;
+  if (s.worker_running) label = 'Generating…';
+  else if (s.worker_done) label = 'Generation complete — open Review.';
+  $('#state-label').textContent = label;
+}
+
+$('#btn-import').addEventListener('click', async () => {
+  $('#state-label').textContent = 'Importing…';
+  await fetch('/api/import', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      zotero_path: $('#zotero_path').value,
+      output_path: $('#output_path').value,
+    }),
+  });
+  const poll = setInterval(async () => {
+    const s = await (await fetch('/api/status')).json();
+    if (!s.import_running) { clearInterval(poll); loadStatus(); }
+  }, 1500);
+});
+
+$('#btn-generate').addEventListener('click', async () => {
+  const resp = await fetch('/api/generate', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      ollama_model: $('#ollama_model').value,
+      ollama_base_url: $('#ollama_base_url').value,
+      batch_size: $('#batch_size').value,
+      vocab_size: $('#vocab_size').value,
+      min_tags: $('#min_tags').value,
+    }),
+  });
+  if (!resp.ok) { $('#state-label').textContent = 'Cannot start: ' + (await resp.text()); return; }
+  const es = new EventSource('/api/progress');
+  es.onmessage = e => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (d.total) $('#bar').style.width = Math.round(100 * d.current / d.total) + '%';
+    if (d.message) $('#progress-text').textContent = d.message;
+    if (d.phase === 'done' || d.phase === 'error') { es.close(); loadStatus(); }
+  };
+});
+
+loadStatus();
+setInterval(loadStatus, 4000);
+</script>
+{% endblock %}

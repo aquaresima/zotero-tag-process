@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Zotero Tag Process{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <nav class="bg-slate-900 text-slate-100 px-4 py-3 flex gap-1 items-center shadow">
+    <a href="/" class="font-semibold mr-6 hover:text-white">zotero&#8209;tag&#8209;process</a>
+    <span class="text-slate-400 mr-2 text-sm">Workflow:</span>
+    <a href="/generate/" class="px-3 py-1 rounded bg-indigo-700 hover:bg-indigo-600">Tag&nbsp;Generation</a>
+    <a href="/update/"   class="px-3 py-1 rounded bg-emerald-700 hover:bg-emerald-600">Zotero&nbsp;Update</a>
+  </nav>
+  <main class="max-w-5xl mx-auto p-6">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

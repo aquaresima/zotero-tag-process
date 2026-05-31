@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Tag Update — Zotero Restructuring{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-2">Zotero Tag Update</h1>
+<p class="text-slate-600 mb-4">Import approved tags from a generatedtags database,
+back up your live library, then apply the tags to Zotero.</p>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded shadow p-4">
+    <h2 class="font-semibold mb-2">Source library</h2>
+    <label class="block text-sm font-medium mb-1">Path to zotero.sqlite</label>
+    <input id="zotero_path" type="text"
+           class="w-full border rounded px-3 py-2 font-mono text-sm" />
+  </div>
+
+  <div class="bg-white rounded shadow p-4">
+    <h2 class="font-semibold mb-2">Generated tags</h2>
+    <label class="block text-sm font-medium mb-1">Path to zotero_generatedtags_*.sqlite</label>
+    <input id="generated_db" type="text"
+           class="w-full border rounded px-3 py-2 font-mono text-sm"
+           placeholder="~/data/zotero_generatedtags_YYYY-MM-DD.sqlite" />
+  </div>
+</div>
+
+<div class="bg-white rounded shadow p-4 mb-6">
+  <div class="flex flex-wrap gap-3 items-center">
+    <button id="btn-import"
+            class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">
+      Import &amp; Normalize
+    </button>
+    <button id="btn-backup"
+            class="bg-slate-700 text-white px-4 py-2 rounded hover:bg-slate-800 disabled:opacity-40"
+            disabled>
+      Backup
+    </button>
+    <button id="btn-apply"
+            class="bg-rose-600 text-white px-4 py-2 rounded hover:bg-rose-700 disabled:opacity-40"
+            disabled>
+      Apply to Zotero
+    </button>
+    <span id="state-label" class="text-sm text-slate-500"></span>
+  </div>
+  <p id="import-summary" class="text-sm text-slate-600 mt-3"></p>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+
+async function loadStatus() {
+  const s = await (await fetch('/api/status')).json();
+  if (!$('#zotero_path').value) $('#zotero_path').value = s.default_zotero_path || '';
+
+  $('#btn-backup').disabled = !s.imported || s.import_running;
+  $('#btn-apply').disabled = !s.any_approved || s.apply_running;
+
+  let label = '';
+  if (s.import_running) label = 'Importing & normalizing…';
+  else if (s.imported) label = `Imported: ${s.item_count} items, ${s.tag_count} tags`;
+  if (s.import_error) label = 'Import error: ' + s.import_error;
+  if (s.apply_running) label = 'Applying to Zotero…';
+  else if (s.apply_done) label = 'Applied to Zotero.';
+  if (s.apply_error) label = 'Apply error: ' + s.apply_error;
+  $('#state-label').textContent = label;
+
+  if (s.imported) {
+    const sum = await (await fetch('/api/import-summary')).json();
+    if (sum && sum.proposals_imported !== undefined) {
+      $('#import-summary').textContent =
+        `Matched ${sum.items_matched} items · imported ${sum.proposals_imported} tags · ` +
+        `skipped ${sum.skipped_existing} existing · ${sum.skipped_unmatched} unmatched.`;
+    }
+  }
+}
+
+$('#btn-import').addEventListener('click', async () => {
+  $('#state-label').textContent = 'Importing & normalizing…';
+  const resp = await fetch('/api/import-tags', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      zotero_path: $('#zotero_path').value,
+      generated_db: $('#generated_db').value,
+    }),
+  });
+  if (!resp.ok) { $('#state-label').textContent = 'Cannot start: ' + (await resp.text()); return; }
+  const poll = setInterval(async () => {
+    const s = await (await fetch('/api/status')).json();
+    if (!s.import_running) { clearInterval(poll); loadStatus(); }
+  }, 1500);
+});
+
+$('#btn-backup').addEventListener('click', async () => {
+  const r = await fetch('/api/backup', {method: 'POST'});
+  const d = await r.json();
+  $('#state-label').textContent = r.ok ? ('Backup: ' + d.backup_path) : ('Backup failed: ' + (d.detail || ''));
+});
+
+$('#btn-apply').addEventListener('click', async () => {
+  await fetch('/api/apply', {method: 'POST'});
+  const poll = setInterval(async () => {
+    const s = await (await fetch('/api/status')).json();
+    if (!s.apply_running) { clearInterval(poll); loadStatus(); }
+  }, 1500);
+});
+
+loadStatus();
+setInterval(loadStatus, 4000);
+</script>
+{% endblock %}

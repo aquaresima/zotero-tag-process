@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Tag Generation{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <nav class="bg-indigo-800 text-indigo-100 px-4 py-3 flex gap-1 items-center shadow">
+    <span class="font-semibold mr-4">Tag&nbsp;Generation</span>
+    <a href="/"       data-nav="setup"  class="nav-link px-3 py-1 rounded hover:bg-indigo-700">1&nbsp;Setup&nbsp;&amp;&nbsp;Generate</a>
+    <a href="/review" data-nav="review" data-lock="worker_done" class="nav-link px-3 py-1 rounded hover:bg-indigo-700">2&nbsp;Review</a>
+  </nav>
+  <main class="max-w-7xl mx-auto p-6">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    async function refreshNav() {
+      try {
+        const s = await (await fetch('/api/status')).json();
+        document.querySelectorAll('.nav-link[data-lock]').forEach(a => {
+          const unlocked = !!s[a.dataset.lock];
+          a.classList.toggle('opacity-40', !unlocked);
+          a.classList.toggle('pointer-events-none', !unlocked);
+        });
+        window.__status = s;
+        document.dispatchEvent(new CustomEvent('status', {detail: s}));
+      } catch (e) { /* ignore */ }
+    }
+    refreshNav();
+    setInterval(refreshNav, 4000);
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

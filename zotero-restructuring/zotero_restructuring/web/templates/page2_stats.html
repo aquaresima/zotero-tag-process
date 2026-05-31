@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}Stats & Network — Zotero Restructuring{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sigma@3.0.0/dist/sigma.min.js"></script>
+{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold mb-3">Stats &amp; Network</h1>
+
+<!-- Global before/after toggle -->
+<div class="bg-white rounded shadow p-3 mb-5 flex items-center gap-3">
+  <span class="text-sm font-medium">View:</span>
+  <button id="tog-orig" class="px-3 py-1 rounded border bg-slate-800 text-white text-sm">Original</button>
+  <button id="tog-post" class="px-3 py-1 rounded border text-sm opacity-40" disabled>Original + approved</button>
+  <span class="text-xs text-slate-400 ml-2">Post-merge shows original tags plus approved proposals.</span>
+</div>
+
+<!-- Stats -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-2 bg-white rounded shadow p-4">
+    <div class="flex justify-between items-center mb-2">
+      <h2 class="font-semibold">Rank–frequency</h2>
+      <label class="text-sm"><input type="checkbox" id="loglog" checked> log–log</label>
+    </div>
+    <canvas id="chart" height="160"></canvas>
+    <p id="zipf" class="text-sm text-slate-600 mt-2"></p>
+  </div>
+  <div class="bg-white rounded shadow p-4">
+    <h2 class="font-semibold mb-2">Summary</h2>
+    <table id="summary" class="text-sm w-full"></table>
+  </div>
+</div>
+
+<div class="bg-white rounded shadow p-4 mt-6">
+  <h2 class="font-semibold mb-2">Top 20 tags <span class="text-xs text-slate-400">(junk in red)</span></h2>
+  <table class="text-sm w-full"><tbody id="top"></tbody></table>
+</div>
+
+<!-- Network -->
+<div class="bg-white rounded shadow p-4 mt-6">
+  <div class="flex flex-wrap gap-3 items-center mb-3">
+    <h2 class="font-semibold mr-2">Network</h2>
+    <div class="inline-flex rounded overflow-hidden border">
+      <button data-space="papers" class="space-btn px-3 py-1 bg-blue-600 text-white">Papers</button>
+      <button data-space="tags"   class="space-btn px-3 py-1">Tags</button>
+    </div>
+    <input id="search" class="border rounded px-2 py-1" placeholder="search node…">
+    <label class="text-sm">min edge weight
+      <input id="minw" type="range" min="1" max="10" value="1" class="align-middle">
+      <span id="minwv">1</span>
+    </label>
+  </div>
+  <div class="flex gap-4">
+    <div id="graph" class="flex-1 bg-slate-50 rounded" style="height:60vh;"></div>
+    <aside id="sidebar" class="w-72 bg-slate-50 rounded p-3 text-sm overflow-auto" style="height:60vh;">
+      <p class="text-slate-400">Click a node for details.</p>
+    </aside>
+  </div>
+</div>
+
+<!-- Excluded tags panel -->
+<div class="bg-white rounded shadow p-4 mt-6">
+  <h2 class="font-semibold mb-1">Non-substantive tags
+    <span class="text-xs font-normal text-slate-400 ml-1">
+      Tags excluded when computing substantive-tag stats.
+    </span>
+  </h2>
+  <div class="flex gap-2 mb-3">
+    <input id="ex-input" type="text" placeholder="tag name to exclude…"
+           class="border rounded px-2 py-1 text-sm flex-1" list="ex-autocomplete">
+    <datalist id="ex-autocomplete"></datalist>
+    <button id="ex-add" class="bg-slate-700 text-white px-3 py-1 rounded text-sm hover:bg-slate-800">Add</button>
+  </div>
+  <div id="ex-list" class="flex flex-wrap gap-2"></div>
+</div>
+
+<script>
+(function () {
+  // db keys: stats uses 'original'/'post'; graph uses 'original'/'new'.
+  let view = 'original';   // 'original' | 'post'
+  let chart, data;
+  let space = 'papers', minw = 1, graph, renderer;
+
+  // ── Toggle enabling (post-merge available once any proposals are approved) ──
+  document.addEventListener('status', (e) => {
+    const enabled = !!e.detail.any_approved;
+    const btn = document.getElementById('tog-post');
+    btn.disabled = !enabled;
+    btn.classList.toggle('opacity-40', !enabled);
+  });
+
+  // ── Stats ──────────────────────────────────────────────────────────────
+  async function loadStats() {
+    data = await (await fetch(`/api/stats?db=${view}`)).json();
+    document.getElementById('zipf').textContent =
+      `Zipf fit: α = ${data.zipf.alpha}, R² = ${data.zipf.r_squared}`;
+    const sum = data.summary;
+    document.getElementById('summary').innerHTML = Object.entries({
+      'Total tags': sum.total_tags, 'Total items': sum.total_items,
+      'Items with 0 tags': sum.items_zero_tags,
+      'Mean tags/item': sum.mean_tags_per_item,
+      'Median tags/item': sum.median_tags_per_item,
+    }).map(([k, v]) => `<tr><td class="py-0.5">${k}</td><td class="text-right font-mono">${v}</td></tr>`).join('');
+    document.getElementById('top').innerHTML = data.top_tags.map(t =>
+      `<tr class="${t.junk ? 'text-red-600' : ''}"><td>${t.tag}</td><td class="text-right font-mono">${t.count}</td></tr>`
+    ).join('');
+    drawChart();
+  }
+
+  function drawChart() {
+    const loglog = document.getElementById('loglog').checked;
+    const pts = data.rank_frequency.map(d => ({x: d.rank, y: d.frequency}));
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('chart'), {
+      type: 'scatter',
+      data: {datasets: [{label: 'tags', data: pts, pointRadius: 2, backgroundColor: '#2563eb'}]},
+      options: {scales: {
+        x: {type: loglog ? 'logarithmic' : 'linear', title: {display: true, text: 'rank'}},
+        y: {type: loglog ? 'logarithmic' : 'linear', title: {display: true, text: 'frequency'}}
+      }}
+    });
+  }
+  document.getElementById('loglog').onchange = drawChart;
+
+  // ── Network ──────────────────────────────────────────────────────────────
+  async function loadGraph() {
+    const gdb = view === 'post' ? 'new' : 'original';
+    const url = `/api/graph?space=${space}&db=${gdb}&min_weight=${minw}`;
+    const g = await (await fetch(url)).json();
+    graph = new graphology.Graph();
+    g.nodes.forEach(n => graph.addNode(n.id, {
+      label: n.label, size: Math.min(2 + n.size, 20),
+      x: Math.random(), y: Math.random(),
+      color: space === 'papers' ? '#2563eb' : '#059669', _data: n
+    }));
+    g.edges.forEach(e => {
+      try { graph.addEdge(e.source, e.target, {weight: e.weight, size: Math.min(e.weight, 5)}); } catch (_) {}
+    });
+    if (renderer) renderer.kill();
+    renderer = new Sigma(graph, document.getElementById('graph'));
+    renderer.on('clickNode', ({node}) => showNode(graph.getNodeAttribute(node, '_data')));
+  }
+
+  function showNode(n) {
+    const sb = document.getElementById('sidebar');
+    if (space === 'papers') {
+      sb.innerHTML = `<h3 class="font-semibold mb-2">${n.label}</h3>
+        <div class="text-xs text-slate-500 mb-2">key: ${n.key}</div>
+        <div class="flex flex-wrap gap-1">` +
+        (n.tags || []).map(t => `<span class="bg-slate-200 rounded px-2 py-0.5">${t}</span>`).join('') + `</div>`;
+    } else {
+      sb.innerHTML = `<h3 class="font-semibold mb-2">${n.label}</h3>
+        <div class="text-xs text-slate-500">papers carrying this tag: ${n.paper_count}</div>`;
+    }
+  }
+
+  document.querySelectorAll('.space-btn').forEach(b => b.onclick = () => {
+    space = b.dataset.space;
+    document.querySelectorAll('.space-btn').forEach(x => x.classList.remove('bg-blue-600','text-white'));
+    b.classList.add('bg-blue-600','text-white');
+    loadGraph();
+  });
+  document.getElementById('minw').oninput = (e) => {
+    minw = +e.target.value; document.getElementById('minwv').textContent = minw; loadGraph();
+  };
+  document.getElementById('search').oninput = (e) => {
+    const q = e.target.value.toLowerCase();
+    if (!graph) return;
+    graph.forEachNode((id, a) => {
+      graph.setNodeAttribute(id, 'color',
+        q && a.label.toLowerCase().includes(q) ? '#dc2626'
+        : (space === 'papers' ? '#2563eb' : '#059669'));
+    });
+    renderer && renderer.refresh();
+  };
+
+  // ── Before/after toggle drives BOTH stats and graph ───────────────────────
+  function setView(v) {
+    view = v;
+    document.getElementById('tog-orig').classList.toggle('bg-slate-800', v === 'original');
+    document.getElementById('tog-orig').classList.toggle('text-white', v === 'original');
+    document.getElementById('tog-post').classList.toggle('bg-slate-800', v === 'post');
+    document.getElementById('tog-post').classList.toggle('text-white', v === 'post');
+    loadStats(); loadGraph();
+  }
+  document.getElementById('tog-orig').onclick = () => setView('original');
+  document.getElementById('tog-post').onclick = (e) => { if (!e.target.disabled) setView('post'); };
+
+  // ── Excluded tags panel ────────────────────────────────────────────────
+  async function loadExcluded() {
+    const rows = await fetch('/api/excluded-tags').then(r => r.json());
+    document.getElementById('ex-list').innerHTML = rows.map(r => `
+      <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm
+        ${r.reason === 'user' ? 'bg-amber-100 text-amber-800' :
+          r.reason === 'status' ? 'bg-blue-100 text-blue-800' :
+          r.reason === 'protected' ? 'bg-red-100 text-red-800' : 'bg-slate-100 text-slate-700'}">
+        ${r.name}<button onclick="removeExcluded(${r.id})" class="ml-1 hover:text-red-600 font-bold">×</button>
+      </span>`).join('');
+  }
+  window.removeExcluded = async (id) => { await fetch('/api/excluded-tags/' + id, {method: 'DELETE'}); loadExcluded(); };
+  document.getElementById('ex-add').onclick = async () => {
+    const input = document.getElementById('ex-input');
+    const name = input.value.trim();
+    if (!name) return;
+    await fetch('/api/excluded-tags', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name})});
+    input.value = ''; loadExcluded();
+  };
+  fetch('/api/tags').then(r => r.json()).then(tags => {
+    document.getElementById('ex-autocomplete').innerHTML = tags.map(t => `<option value="${t}">`).join('');
+  });
+
+  // ── init ──────────────────────────────────────────────────────────────
+  loadStats(); loadGraph(); loadExcluded();
+})();
+</script>
+{% endblock %}

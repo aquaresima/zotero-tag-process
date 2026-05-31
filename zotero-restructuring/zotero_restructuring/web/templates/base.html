@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Zotero Restructuring{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <nav class="bg-slate-800 text-slate-100 px-4 py-3 flex gap-1 items-center shadow">
+    <span class="font-semibold mr-4">Zotero&nbsp;Restructuring</span>
+    <a href="/"      data-nav="update" class="nav-link px-3 py-1 rounded hover:bg-slate-700">1&nbsp;Tag&nbsp;Update</a>
+    <a href="/stats" data-nav="stats"  data-lock="imported" class="nav-link px-3 py-1 rounded hover:bg-slate-700">2&nbsp;Stats&nbsp;&amp;&nbsp;Network</a>
+  </nav>
+  <main class="max-w-7xl mx-auto p-6">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // Lock/unlock nav links based on /api/status.
+    async function refreshNav() {
+      try {
+        const s = await (await fetch('/api/status')).json();
+        document.querySelectorAll('.nav-link[data-lock]').forEach(a => {
+          const key = a.dataset.lock;
+          const unlocked = !!s[key];
+          if (unlocked) {
+            a.classList.remove('opacity-40', 'pointer-events-none');
+          } else {
+            a.classList.add('opacity-40', 'pointer-events-none');
+          }
+        });
+        window.__status = s;
+        document.dispatchEvent(new CustomEvent('status', {detail: s}));
+      } catch (e) { /* ignore */ }
+    }
+    refreshNav();
+    setInterval(refreshNav, 4000);
+  </script>
+</body>
+</html>

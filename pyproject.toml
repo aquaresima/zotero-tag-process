@@ -1,0 +1,8 @@
+# uv workspace — run `uv sync` from the repo root to install everything.
+# The entry-point package is zotero-tag-process/; install that to get the CLI.
+[tool.uv.workspace]
+members = [
+    "zotero-tag-process",
+    "tag-generation",
+    "zotero-restructuring",
+]
